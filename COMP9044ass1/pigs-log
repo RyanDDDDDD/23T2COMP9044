@@ -1,0 +1,19 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo " pigs-log: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+cur=$(cat "./.pig/head")
+
+grep -E "^[0-9]+\|[^|]+\|$cur\|[0-9]+$" <"./.pig/commit_log" |
+cut -f1,2 -d'|' |
+tr "|" " "|
+sort |
+tac
+
+exit 0

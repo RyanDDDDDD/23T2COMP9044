@@ -1,0 +1,9 @@
+#!/bin/dash
+
+# check whether local repo is initialized before any further operations
+if [ "$(find . -name ".pig" | wc -l)" -eq 1 ]
+then
+  exit 0
+else
+  exit 1 
+fi

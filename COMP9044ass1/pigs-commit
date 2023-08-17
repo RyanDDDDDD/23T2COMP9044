@@ -1,0 +1,144 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo "pigs-commit: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+# check input arguments
+if [ "$#" -eq 2 ]
+then
+  if [ "$1" = "-m" ] && [ "$2" = "-a" ]
+  then
+    echo "pigs-commit: error: please leave commit message"
+    exit 1
+  elif [ "$2" = "-m" ] && [ "$1" = "-a" ]
+  then
+    echo "pigs-commit: error: please leave commit message"
+    exit 1
+  elif [ "$1" != "-m" ]
+  then
+    echo "pigs-commit: error: please make sure input -m as argument"
+    exit 1
+  fi
+elif [ "$#" -eq 3 ]
+then
+  if [ "$1" = "-m" ] && [ "$2" = "-a" ]
+  then
+    :
+  elif [ "$1" = "-a" ] && [ "$2" = "-m" ]
+  then
+    :
+  else
+    echo "pigs-commit: error: please enter -m as arguments"
+    exit 1
+  fi
+else
+  echo "pigs-commit: error: please only enter 2 or 3 arguments"
+  exit 1
+fi
+
+# if -a option exists, update index area using pigs-add
+if [ "$#" -eq 3 ]
+then
+  find "./.pig/index" -maxdepth 1 |
+  grep -Ev "^\.\/\.pig\/index\/\.diff$" |
+  grep -Ev "^\.\/\.pig\/index$" |
+  sed -E "s/^\.\/\.pig\/index\/(.*)$/\1/g"|
+  while read -r file 
+  do
+    pigs-add "$file"
+  done
+fi
+
+# find the next commit number and current branch
+cur=$(cat "./.pig/commit_num")
+ptr=$(cat "./.pig/head")
+
+# check if index is clean before commit to local repo
+if [ "$(wc -l <"./.pig/index/.diff")" -eq 0 ] 
+then
+  echo "nothing to commit"
+  exit 1
+fi
+
+
+# create commit dir for current version
+if [ "$#" -eq 3 ]
+  then
+    # 3 options
+    mkdir -p "./.pig/branches/$ptr/$cur/$3"
+  else
+    # 2 options 
+    mkdir -p "./.pig/branches/$ptr/$cur/$2"
+  fi
+
+# copy all content in index to specific branch of local repo
+find "./.pig/index/" -maxdepth 1 |
+grep -Ev "^\.\/\.pig\/index\/$" |
+while read -r file
+do  
+  if [ "$#" -eq 3 ]
+  then
+    # 3 options
+    cp -r "$file" "./.pig/branches/$ptr/$cur/$3/"
+  else
+    # 2 options 
+    cp -r "$file" "./.pig/branches/$ptr/$cur/$2/"
+  fi
+done
+
+# need to check .diff to see whether we use rm --force to delete certain files permenantly in repo
+while read -r line
+do
+  curFile=$(echo "$line" | cut -f1 -d' ')
+  operation=$(echo "$line" | cut -f2 -d' ')
+  if [ "$operation"  = "deleted_local_index_working" ]
+  then
+    # we used rm --force previously, check through the previous history and delete current file
+    ptr=$(cat "./.pig/head")
+    find "./.pig/branches/$ptr" -maxdepth 1|
+    grep -Ev "^\.\/\.pig\/branches\/$ptr$" |
+    while read -r _
+    do
+      if [ -e "./.pig/branches/$ptr/$curFile" ]
+      then
+        rm "./.pig/branches/$ptr/$curFile"
+      fi
+    done
+  fi
+done <"./.pig/index/.diff"
+
+# clean diff file in index
+rm "./.pig/index/.diff" && touch "./.pig/index/.diff"
+
+# update the head pointer to points to an new snapshot
+tmp=$(mktemp)
+sed -E "s/^($ptr|$ptr [0-9]+)$/$ptr $cur/" <"./.pig/branchList" >"$tmp"
+mv "$tmp" "./.pig/branchList"
+
+# record commit time
+time=$(date +%s)
+
+# record current commit into commit log
+if [ "$1" = "-a" ] || [ "$2" = "-a" ]
+then
+  echo "$cur|$3|$ptr|$time" >>"./.pig/commit_log"
+else
+  echo "$cur|$2|$ptr|$time" >>"./.pig/commit_log"
+fi
+
+# update commit number for next commit
+cur=$((cur + 1))
+echo "$cur" >"./.pig/commit_num"
+
+# commit finished
+echo "Committed as commit $((cur - 1))"
+
+# set an time stamp for each commit, so that the created time for each commit would be unique
+sleep 1
+
+exit 0

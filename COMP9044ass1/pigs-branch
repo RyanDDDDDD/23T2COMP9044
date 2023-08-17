@@ -1,0 +1,209 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo " pigs-branch: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+# no argumens provided, list all existing branch
+if [ "$#" -eq 0 ]
+then
+  # check commit number first
+  num=$(cat "./.pig/commit_num")
+  if [ "$num" -eq 0 ]
+  then
+    echo "pigs-branch: error: this command can not be run until after the first commit"
+    exit 1
+  fi
+  # print all the existing branches
+  find ./.pig/branches -maxdepth 1 |
+  grep -Ev "^\.\/\.pig\/branches$" |
+  sed -E "s/^\.\/\.pig\/branches\/(.*)$/\1/g" |
+  sort
+  exit 0
+fi
+
+if [ "$#" -eq 1 ]
+then
+  # only specify -d to delete branch, but no branch name provided
+  if [ "$1" = "-d" ]
+  then
+    echo "pigs-branch: error: branch name required"
+    exit 1
+  fi
+
+  # check if no commit, when true, there is still no branch created
+  newCommitNum=$(cat "./.pig/commit_num")
+  if [ "$newCommitNum" -eq 0 ]
+  then
+    echo "pigs-branch: error: not a valid object name: 'master'"
+    exit 1
+  fi
+
+  # check if the branch with same name already exists
+  if [ -e "./.pig/branches/$1" ]
+  then
+    echo "pigs-branch: error: branch '$1' already exists"
+    exit 1
+  fi
+
+  # create an new branch with same content by copying current branch
+  cur=$(cat "./.pig/head")
+  
+  # create temp file to record new commit for new branch
+  touch "./.pig/temp"
+  tmp="./.pig/temp"
+
+  mkdir "./.pig/branches/$1"
+
+  # need to assign a unique commit number for each commit in new branch
+  find "./.pig/branches/$cur" -maxdepth 1 |
+  grep -Ev "^\.\/\.pig\/branches\/$cur$" |
+  while read -r oldCommit
+  do
+    oldCommitNum=$(echo "$oldCommit" | 
+                  sed -E "s/^\.\/\.pig\/branches\/$cur\/([0-9]+)$/\1/")
+
+    cp -r "$oldCommit" "./.pig/branches/$1/$oldCommitNum"
+  
+    # record each new entry for new branch into commit log
+    while read -r eachCommit
+    do
+      eachCommitNum=$(echo "$eachCommit"| cut -f1 -d'|')
+      if [ "$eachCommitNum" = "$oldCommitNum" ]
+      then
+        # find the corresponding commit
+        copiedMessage=$(echo "$eachCommit"| cut -f2 -d'|')
+        copiedDate=$(echo "$eachCommit"| cut -f4 -d'|')
+        echo "$eachCommitNum|$copiedMessage|$1|$copiedDate" >>"$tmp"
+        break
+      fi
+    done <"./.pig/commit_log"
+  done
+
+  # restore commit number by temp file
+  newCommitNum=$(sort "$tmp"| tail -n1  | cut -f1 -d'|')
+  
+  # update branch list 
+  echo "$1 $newCommitNum" >>"./.pig/branchList"
+
+  # update commit log for new branch
+  cat "$tmp" >>"./.pig/commit_log"
+
+  rm "$tmp"
+  exit 0
+fi
+
+if [ "$#" -eq 2 ]
+then
+  # -d option provided, delete specified branch
+  if [ "$1" != "-d" ]
+  then
+    echo "pigs-branch: error: please provide only one argument to create branch"
+    exit 1
+  fi
+
+  # check if delete the default branch
+  if [ "$2" = "master" ]
+  then
+    echo "pigs-branch: error: can not delete branch 'master': default branch"
+    exit 1
+  fi
+
+  # check if the deleted branch exists
+  if [ ! -e "./.pig/branches/$2" ]
+  then
+    echo "pigs-branch: error: branch '$2' doesn't exist"
+    exit 1
+  fi
+
+  # check if unmerge changes exists in the deleted branch
+  ### need to go through all existing branches
+  deletedBranch=$2
+  deletedBranchCommit=$(grep -E "^$deletedBranch [0-9]*$" <"./.pig/branchList" | cut -f2 -d' ')
+  deletedBranchLatest=$(grep -E "^$deletedBranchCommit\|[^|]+\|$deletedBranch\|([0-9]+)$" <"./.pig/commit_log" |  cut -f4 -d'|')
+
+  # temp file for storing all commits of the deleted branch
+  tmp=$(mktemp)
+
+  # get all commit of the deleted branch
+  find ./.pig/branches/"$deletedBranch" -maxdepth 1 |
+  grep -Ev "^\.\/\.pig\/branches\/$deletedBranch$" | 
+  sed -E "s/\.\/\.pig\/branches\/$deletedBranch\/(.*)/\1/g" >"$tmp"
+
+  # count the number of commit in the deleted branch
+  commitsOfDeleted=$(wc -l "$tmp" | cut -f1 -d' ')
+
+  # temp file for storing all commits of the current branch
+  tmp2=$(mktemp)
+
+  fullyMerged="false"
+
+  # still wrong, we need to check if the deleted branch is fully merge into one of the branches
+  # check date when commit was created
+  while read -r line
+  do
+    curBranch=$(echo "$line" | cut -f1 -d' ')
+    curBranchCommit=$(echo "$line" | cut -f2 -d' ')
+    curBranchLatest=$(grep -E "^$curBranchCommit\|[^|]+\|$curBranch\|([0-9]+)$" "./.pig/commit_log"| cut -f4 -d'|')  
+
+    # dont compare the same branch
+    if [ "$curBranch" = "$deletedBranch" ]
+    then
+      continue
+    fi
+
+    # the deleted branch is head of the current branch, no need to compare
+    if [ "$deletedBranchLatest" -gt "$curBranchLatest" ]
+    then
+      continue
+    fi
+
+    # need to check each commit in the deleted branch to ensure they are merger into the current branch
+    # compared the intersection of commit between two branches
+    find ./.pig/branches/"$curBranch" -maxdepth 1 |
+    grep -Ev "^\.\/\.pig\/branches\/$curBranch$" | 
+    sed -E "s/\.\/\.pig\/branches\/$curBranch\/(.*)/\1/g" >"$tmp2"
+
+    # process tmp to get the intersection
+    cat "$tmp" >>"$tmp2"
+    commitsOfCurrent=$(sort <"$tmp2"|
+                    uniq -d |
+                    wc -l |
+                    cut -f1 -d' ')
+
+    # find a fully merged branch
+    if [ "$commitsOfDeleted" -eq "$commitsOfCurrent" ]
+    then
+      fullyMerged="true"
+      break
+    fi
+  done <"./.pig/branchList"
+  
+  # remove all temp files
+  rm "$tmp"
+  rm "$tmp2"
+
+  # no branch is fully merged with the deleted branch
+  if [ "$fullyMerged" = "false" ]
+  then 
+    echo "pigs-branch: error: branch '$deletedBranch' has unmerged changes"
+    exit 1
+  fi
+
+  # delete specified branch
+  rm -rf "./.pig/branches/$deletedBranch"
+  echo "Deleted branch '$deletedBranch'"
+
+  # delete the pointer of deleted branch
+  sed -Ei "/^$deletedBranch [0-9]*$/d" "./.pig/branchList" 
+
+  # delete all snapshot info of the deleted branch in commit log
+  sed -Ei "/^[0-9]+\|[^|]+\|$deletedBranch\|[0-9]+$/d" "./.pig/commit_log" 
+
+fi
+
+exit 0

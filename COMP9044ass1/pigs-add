@@ -1,0 +1,71 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo "pigs-add: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+# try to create some files with ., - and _ and [a-zA-Z0-9] characters 
+
+# check if file not exists in working directory
+for file in "$@"
+do 
+  if [ ! -e "$file" ] && [ ! -e "./.pig/index/$file" ]
+  then
+    echo "pigs-add: error: can not open '$file'"
+    exit 1
+  fi
+done
+
+# start copying files into index
+for file in "$@"
+do 
+  if [ -e "./.pig/index/$file" ]
+  then
+    if [ -e "./$file" ]
+    then
+      # file exists in index and working dir, check diff to compare file
+      if [ "$(diff "$file" "./.pig/index/$file" | wc -l)" -eq 0 ]
+      then
+        # file not changed, skip the current file
+        continue
+      else
+        # file changed
+        cp -r "$file" "./.pig/index"
+        if [ "$(grep -Ec "^$file .*$" <"./.pig/index/.diff")" -eq 1 ]
+        then
+          sed -Ei "s/^$file .*$/$file changed/g" "./.pig/index/.diff"
+        else
+          # not record current file before
+          echo "$file changed" >>"./.pig/index/.diff"
+        fi
+      fi
+    else
+      # file not exists in working dir
+      # rm file for next commit
+      rm "./.pig/index/$file"
+      echo "$file deleted_local_index" >>"./.pig/index/.diff"
+    fi
+  else
+    if [ "$file" = ".pig" ]
+    then
+      # if try to add pig configuration file, skip
+      continue
+    fi
+    
+    # file not exists, simply copy it into index to indicate working dir is changed
+    cp -r "$file" "./.pig/index"
+    if [ "$(grep -Ec "^$file .*$" <"./.pig/index/.diff")" -eq 1 ]
+    then
+      sed -Ei "s/^$file .*$/$file added/g" "./.pig/index/.diff"
+    else
+      # not record current file before
+      echo "$file added" >>"./.pig/index/.diff"
+    fi
+  fi
+done
+
+exit 0

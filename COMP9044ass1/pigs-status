@@ -1,0 +1,162 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo "pigs-status: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+checkDiff(){
+  while read -r line
+  do
+    # check index first
+    curFile=$(echo "$line" | cut -f1 -d' ')
+
+    if [ "$curFile" = "$1" ]
+    then
+      operation=$(echo "$line" | cut -f2 -d' ')
+      case "$operation" in
+      "changed")
+        if [ "$(diff "./$1" "./.pig/index/$1"| wc -l )" -gt 0 ]
+        then
+          # file is changed after added into index
+          echo "$1 - file changed, different changes staged for commit"
+        else
+          echo "$1 - file changed, changes staged for commit"
+        fi
+        ;;
+      "added")
+        # check if the file in working dir still exists
+        if [ ! -e "./$file" ]
+        then
+          echo "$1 - added to index, file deleted"
+        else
+          # compare file in index and working dir
+          if [ "$(diff "./$1" "./.pig/index/$1"| wc -l )" -gt 0 ]
+          then
+            # check if the file is changed after added into index
+            echo "$1 - added to index, file changed"
+          else
+            echo "$1 - added to index"
+          fi
+        fi
+        ;;
+      "deleted_index")
+        # pig-rm --cached
+        # need to check if is also deleted from work
+        if [ -e "./$curFile" ]
+        then
+          echo "$1 - deleted from index"
+        else
+          echo "$1 - file deleted, deleted from index"
+        fi
+        ;;
+      esac
+    fi
+  done <"./.pig/index/.diff"
+}
+
+checkSame(){
+  # check is current file exists in both places
+  if [ -e "./$1" ] && [ -e "./.pig/index/$1" ]
+  then 
+    # the current file is not changed in index
+    if [ "$(grep -Ec "^$1 .*$" <"./.pig/index/.diff")" -eq 0 ]
+    then
+      # the tracked file has been changed and added to index
+      if [ "$(diff "./$1" "./.pig/index/$1" | wc -l)" -eq 0 ]
+      then
+        echo "$1 - same as repo"
+      else
+        echo "$1 - file changed, changes not staged for commit"
+      fi
+    fi
+  fi
+}
+
+checkUntracked(){
+  # first check if file is in working dir but not index
+  if [ -e "./$1" ] && [ ! -e "./.pig/index/$1" ]
+  then
+    exist="false"
+    # check whether .diff has record the snapshot of current file
+    while read -r line
+    do
+      curFile=$(echo "$line" | cut -f1 -d' ')
+      if [ "$curFile" = "$1" ]
+      then
+        # we record some relative operations with the current file,
+        # which means we perform rm --cached to delete current file previously
+        exist="true"
+      fi
+    done <"./.pig/index/.diff"
+
+    # this is an untracked file
+    if [ "$exist" = "false" ]
+    then
+      echo "$1 - untracked"
+    fi
+  fi
+}
+
+tmp=$(mktemp)
+
+# print status of all files
+# first check the files exists in working dir 
+find . -type f|
+sed -E "s/^\.\/(.*)/\1/" |
+grep -Ev "^$" |
+grep -Ev "^\.pig.*$" |
+grep -Ev "^pigs-init-check$"|
+sort |
+while read -r file
+do
+  # check if the file in index has benn changed, not include the 
+  # file which has been rm from working dir and index
+  checkDiff "$file"
+
+  # check if the file in index and working dir is not changed
+  checkSame "$file"
+
+  # check if there is any other untracked files
+  checkUntracked "$file"
+done >"$tmp"
+
+## check the files not exists in working dir
+# check if a file is only rm from working dir but not index
+find ./.pig/index -type f |
+sed -E "s/^\.\/\.pig\/index\/(.*)$/\1/" |
+grep -Ev "^\.diff$" |
+while read -r file
+do
+  if [ ! -e "./$file" ] && [ -e "./.pig/index/$file" ]
+  then
+    # check if file is added to index but not commit
+    if [ "$(grep -Ec "^$file added$" <"./.pig/index/.diff")" -eq 1 ]
+    then
+      echo "$file - added to index, file deleted"
+    else
+      echo "$file - file deleted"
+    fi
+  fi
+done >>"$tmp"
+
+# check .diff to see if a file is rm from working dir and index
+while read -r line
+do
+  curFile=$(echo "$line" | cut -f1 -d' ')
+  operation=$(echo "$line" | cut -f2 -d' ')
+  if [ "$operation" = "deleted_local_index" ]
+  then
+    echo "$curFile - file deleted, deleted from index"
+  fi
+done <"./.pig/index/.diff" >>"$tmp"
+
+# print the file in sorted order
+sort <"$tmp"
+
+rm "$tmp"
+
+exit 0

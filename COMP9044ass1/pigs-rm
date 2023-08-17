@@ -1,0 +1,283 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo "pigs-rm: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+if [ "$#" -eq 0 ]
+then
+  # no arguments provided
+  echo "pigs-rm: error: no arguments provided"
+  exit 1
+elif [ "$#" -eq 1 ] 
+then
+  # 1 arguments provided
+  if [ "$1" = "--cached" ] || [ "$1" = "--force" ]
+  then
+    echo "pigs-rm: error: please specify a file to delete"
+    exit 1
+  fi
+elif [ "$#" -eq 2 ]
+then
+  # 2 arguments provided
+  if [ "$1" = "--cached" ] && [ "$2" = "--force" ]
+  then
+    echo "pigs-rm: error: please specify a file to delete"
+    exit 1
+  elif [ "$2" = "--cached" ] && [ "$1" = "--force" ]
+  then
+    echo "pigs-rm: error: please specify a file to delete"
+    exit 1
+  fi
+fi
+
+# test: if user input --force/--cached twice
+first=$(echo "$@" | cut -f1 -d' ')
+second=$(echo "$@" | cut -f2 -d' ')
+
+options=0
+
+# determine which case we are in
+if [ "$first" != "--cached" ] && [ "$first" != "--force" ]
+then
+  # no options provided
+  options=0
+elif [ "$first" = "--cached" ] && [ "$second" = "--force" ]
+then
+  # two options provided
+  options=2
+elif [ "$second" = "--cached" ] && [ "$first" = "--force" ]
+then
+  # two options provided
+  options=2
+else
+  # one options provided
+  options=1
+fi
+
+# access current branch/commit number/message
+ptr=$(cat "./.pig/head")
+cur=$(grep -E "^$ptr .*$" <"./.pig/branchList" | cut -f2 -d' ')
+message=$(grep -E "^$cur\|([^|]+)\|$ptr\|[0-9]+$" <"./.pig/commit_log" | cut -f2 -d'|')
+
+# check if the file need to be deleted exists
+for file in "$@"
+do 
+  if [ "$file" = "--cached" ] || [ "$file" = "--force"  ]
+  then
+    continue
+  fi
+
+  # check if file exists in working dir/index/local repo
+  if [ ! -e "./$file" ] && [ ! -e "./.pig/index/$file" ]
+  then
+    # file not in working dir and index, can not rm
+    echo "pigs-rm: error: '$file' is not in the pigs repository"
+    exit 1
+  elif [ ! -e "./.pig/index/$file" ]
+  then
+    # file not in index, can not rm
+    echo "pigs-rm: error: '$file' is not in the pigs repository"
+    exit 1
+  elif [ ! -e "./.pig/index/$file" ] && [ "$options" -eq 1 ] && [ "$first" = "--cached" ]
+  then
+    # file not in working index, can not rm
+    echo "pigs-rm: error: '$file' is not in the pigs repository"
+    exit 1
+  elif [ ! -e "./.pig/index/$file" ] && [ ! -e "./.pig/index/$file" ] && [ "$options" -eq 1 ] && [ "$first" = "--force" ]
+  then
+    # file not in working dir and index, can not rm
+    echo "pigs-rm: error: '$file' is not in the pigs repository"
+    exit 1
+  fi
+
+  # check file difference among wokring dir/index and local repo
+  if [ -e "./.pig/branches/$ptr/$cur/$message/$file" ]
+  then
+    # file also exists in local repo
+    # if the file in index is different with the same one in working dir
+    if [ -e "./$file" ] && [ "$(diff "./$file" "./.pig/index/$file"| wc -l)" -gt 0 ]
+    then
+      # if file in index is different with the one in working dir
+      if [ "$(diff "./.pig/branches/$ptr/$cur/$message/$file" "./.pig/index/$file"| wc -l)" -gt 0 ]
+      then
+        if [ "$options" -eq 1 ] && [ "$first" = "--force" ]
+        then
+          # delete local repo/working dir/index
+          :
+        elif [ "$options" -eq 2 ]
+        then
+          :
+        else
+          echo "pigs-rm: error: '$file' in index is different to both the working file and the repository"
+          exit 1
+        fi
+      else  
+        if [ "$options" -eq 1 ] && [ "$first" = "--cached" ]
+        then
+          # only delete index
+          :
+        else
+          # file changed, it is not safe to delete an uncommit change
+          echo "pigs-rm: error: '$file' in the repository is different to the working file"
+          exit 1
+        fi
+      fi
+    else
+      if [ "$(diff "./.pig/branches/$ptr/$cur/$message/$file" "./.pig/index/$file"| wc -l)" -gt 0 ]
+      then
+        if [ "$options" -eq 1 ] && [ "$first" = "--cached" ]
+        then
+          # only delete index
+          :
+        else
+          # index/wokring dir are the same, but different with local repo
+          echo "pigs-rm: error: '$file' has staged changes in the index"
+          exit 1
+        fi
+      fi
+    fi
+  else
+    if [ "$options" -eq 0 ]
+    then
+      # file added to index but not commit, which is not safe
+      echo "pigs-rm: error: '$file' has staged changes in the index"
+      exit 1
+    fi
+  fi 
+done
+
+deleteFiles(){
+  case "$1" in
+    "workingDir")
+      echo "$@" |
+      tr ' ' '\n' |
+      grep -Ev "^--.*$" |
+      grep -Ev "^workingDir$" |
+      while read -r file
+      do
+        rm -rf "./$file"
+      done
+      ;;
+    "index")
+      echo "$@" |
+      tr ' ' '\n' |
+      grep -Ev "^--.*$" |
+      grep -Ev "^index$" |
+      while read -r file
+      do
+        rm -rf "./.pig/index/$file"
+      done
+      ;;
+  esac
+}
+
+# delete files according to the number of options we specify
+case "$options" in
+0)
+  # delete working dir and index
+  # first delete files in working directory
+  deleteFiles "workingDir" "$@"
+
+  # then files in index
+  deleteFiles "index" "$@"
+
+  # record each file need to be deleted into .diff
+  echo "$@" |
+  tr ' ' '\n' |
+  grep -Ev "^--.*$" |
+  while read -r file
+  do
+    if [ "$(grep -Ec "^$file .*$" <"./.pig/index/.diff")" -eq 1 ]
+    then
+      # check whether the file is recorded in repo history
+      if [ -e "./.pig/branches/$ptr/$cur/$message/$file" ]
+      then
+        sed -Ei "s/^$file .*$/$file deleted_local_index/g" "./.pig/index/.diff"
+      else
+        # not recorded, restore to untracked
+        sed -Ei "/^$file .*$/d" "./.pig/index/.diff"
+      fi
+    else
+      # not record current file before
+      echo "$file deleted_local_index" >>"./.pig/index/.diff"
+    fi
+  done
+  ;;
+1)
+  # cached or force
+  if [ "$first" = "--cached" ]
+  then
+    # --cached option
+    deleteFiles "index" "$@"
+
+    # record each file need to be deleted into .diff
+    echo "$@" |
+    tr ' ' '\n' |
+    grep -Ev "^--.*$" |
+    while read -r file
+    do
+      if [ "$(grep -Ec "^$file .*$" <"./.pig/index/.diff")" -eq 1 ]
+      then
+        if [ -e "./.pig/branches/$ptr/$cur/$message/$file" ]
+        then
+          # current file has been recorded, change the record to deleted
+          sed -Ei "s/^$file .*$/$file deleted_index/g" "./.pig/index/.diff"
+        else
+          # not recorded, restore to untracked
+          sed -Ei "/^$file .*$/d" "./.pig/index/.diff"
+        fi
+      else
+        # not record current file before
+        echo "$file deleted_index" >>"./.pig/index/.diff"
+      fi
+    done
+  else
+    # --force option, delete all records in local repo,index and working dir
+    deleteFiles "workingDir" "$@"
+    deleteFiles "index" "$@"
+
+    # record each file need to be deleted into .diff
+    echo "$@" |
+    tr ' ' '\n' |
+    grep -Ev "^--.*$" |
+    while read -r file
+    do
+      if [ "$(grep -Ec "^$file .*$" <"./.pig/index/.diff")" -eq 1 ]
+      then
+        # current file has been recorded, perform infile edit
+        sed -Ei "s/^$file .*$/$file deleted_local_index_workingDir/g" "./.pig/index/.diff"
+      fi
+    done
+  fi
+  ;;
+2)
+  # only delete index when specify --force and --cached at the same time
+  # when specify these two options at the same time, execute --cached only
+  deleteFiles "index" "$@"
+  # record each file need to be deleted into .diff
+  echo "$@" |
+  tr ' ' '\n' |
+  grep -Ev "^--.*$" |
+  while read -r file
+  do
+    if [ "$(grep -Ec "^$file .*$" <"./.pig/index/.diff")" -eq 1 ]
+    then
+      if [ -e "./.pig/branches/$ptr/$cur/$message/$file" ]
+      then
+        sed -Ei "s/^$file .*$/$file deleted_index/g" "./.pig/index/.diff"
+      else
+        # not recorded, restore to untracked
+        sed -Ei "/^$file .*$/d" "./.pig/index/.diff"
+      fi
+    else
+      # not record current file before
+      echo "$file deleted_index" >>"./.pig/index/.diff"
+    fi
+  done
+  ;;
+esac

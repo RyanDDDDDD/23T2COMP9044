@@ -1,0 +1,36 @@
+#!/bin/dash
+
+# check if .pig exists
+if [ -d ".pig" ]
+then
+  echo "pigs-init: error: .pig already exists"
+  exit 1
+fi
+
+# initialize .pig directory
+mkdir .pig
+
+# initialize statging are
+mkdir "./.pig/index"
+
+# initialize a diff file to indicate which file is changed
+touch "./.pig/index/.diff"
+
+# intialize branch, this is still a fake branch (which is not exist) until we make a first commit 
+mkdir -p "./.pig/branches/master"
+
+# initialize head pointer and point to master
+echo "master" >"./.pig/head"
+
+# initialize a branch list to specify where the pointer points to in each branch
+echo "master" >"./.pig/branchList"
+
+# initialize commit number for later commit
+echo "0" >"./.pig/commit_num"
+
+# initialize commit log for pigs_log
+touch "./.pig/commit_log"
+
+# local repo created successfully
+echo "Initialized empty pigs repository in .pig"
+exit 0

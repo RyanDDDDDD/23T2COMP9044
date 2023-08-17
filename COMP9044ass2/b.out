@@ -1,0 +1,72 @@
+hello world
+42 is the meaning of life, the universe, and everything
+To be or not to be: that is the question
+The meaning of life, the universe, and everything is 42
+I hope you are enjoying COMP2041 this semester
+Hello, World
+racecar
+1 COMP1511 COMP1521 COMP2511 COMP2521 a.c a.out b.c b.out c d demo00.sh demo01.sh demo02.sh demo03.sh demo04.sh enrolments.tsv examples file gcc.sh sheepy.py temp.py test-allsamples.sh test-sample.sh test.py test.sh test00.sh test01.sh test02.sh test03.sh test04.sh test05.sh test_command_line.sh test_echo.sh test_external.sh test_file.txt test_for.sh test_globbing.sh test_while.sh tmp.numbers
+a.c b.c
+all of the single letter Python files are: ?.py
+1
+2
+3
+this
+is
+a
+string
+a.c
+b.c
+a.c
+b.c
+-rw-r----- 1 z5351656 z5351656 0 Aug  6 07:24 test_file.txt
+COMP1511
+mkdir: cannot create directory ‘COMP1511’: File exists
+COMP1521
+mkdir: cannot create directory ‘COMP1521’: File exists
+COMP2511
+mkdir: cannot create directory ‘COMP2511’: File exists
+COMP2521
+mkdir: cannot create directory ‘COMP2521’: File exists
+going to print the first 5 lines of 2
+FOOBARBAZ
+/dev/null is writeable
+1
+11
+111
+1111
+11111
+111111
+1111111
+11111111
+111111111
+1111111111
+hello    world
+This is not a $variable
+This is not a glob *.sh
+hello    world
+This is sill a 
+This is not a glob *.sh
+Hello z5351656, today is 2023-08-06
+command substitution still works in double quotes: vx11
+command substitution does not work in single quotes: `not a command`
+I have 5 arguments
+My arguments are 1 2 3 4 5
+. . . . . 
+. . . . . 
+. . . . . 
+. . . . . 
+. . . . . 
+dos2unix: converting file test_file.txt to Unix format...
+many arguments
+Hello z5351656, today is 2023-08-06
+command substitution still works in double quotes: vx11
+command substitution does not work in single quotes: $(not a command)
+The groups I am part of are z5351656 : z5351656
+13
+hello
+world
+/dev/null is writeable
+/dev/null is not executable
+/dev/null is writeable and readable
+I am enrolled in COMP2041/9044

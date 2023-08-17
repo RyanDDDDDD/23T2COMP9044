@@ -1,0 +1,64 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo "pigs-show: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+# obtain arguments
+num=$(echo "$1" |cut -f1 -d":")
+file=$(echo "$1" |cut -f2 -d":")
+
+# get next commit num, which is currently not valid
+nextNum=$(cat "./.pig/commit_num")
+
+# commit validation
+if [ "$num" = "" ]
+then
+  # commit number not provided, print file in index
+  if [ ! -e "./.pig/index/$file" ]
+  then
+    echo "pigs-show: error: '$file' not found in index"
+    exit 1
+  fi
+  # print file in index
+  cat "./.pig/index/$file"
+  exit 0
+else
+  # commit number provided, needs to check whether this is a valid commit number,
+  # which is, it must match one of the commit number of all previous commits
+  if [ "$num" -ge "$nextNum" ] 
+  then
+    echo "pigs-show: error: unknown commit '$num'"
+    exit 1;
+  fi
+fi
+
+# print the file in specific commit
+branch=""
+message=""
+
+# print file in local repo
+while read -r eachCommit
+do
+  curNum=$(echo "$eachCommit" | cut -f1 -d'|')
+  if [ "$num" -eq "$curNum" ]
+  then
+    branch=$(echo "$eachCommit" | cut -f3 -d'|')
+    message=$(echo "$eachCommit" | cut -f2 -d'|')
+    break
+  fi
+done <"./.pig/commit_log"
+
+# print file in local repo
+if [ -e "./.pig/branches/$branch/$num/$message/$file" ]
+then
+  cat "./.pig/branches/$branch/$num/$message/$file"
+  exit 0
+else
+  echo "pigs-show: error: '$file' not found in commit $num"
+  exit 1
+fi

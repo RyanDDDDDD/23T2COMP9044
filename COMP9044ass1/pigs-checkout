@@ -1,0 +1,171 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo "pigs-checkout: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+# check if input is valid
+if [ ! "$#" -eq 1 ]
+then
+  echo "pigs-checkout: error: '$2' did not match any file(s) known to pig"
+  exit 1
+fi
+
+if [ "$(cat "./.pig/head")" = "$1" ]
+then
+  echo "Already on $1"
+  exit 0
+fi
+
+tmp=$(mktemp)
+
+# check if the specified branch is created
+created="false"
+find "./.pig/branches" -maxdepth 1 |
+grep -Ev "^./.pig/branches$" |
+sed -E "s/^\.\/\.pig\/branches\/(.*)$/\1/g" |
+while read -r branch
+do
+  if [ "$branch" = "$1" ]
+  then
+    # the specified branch is created 
+    echo "true" >"$tmp"
+  fi
+done
+
+created=$(cat "$tmp")
+rm "$tmp"
+
+if [ ! "$created" = "true" ]
+then
+  echo "pigs-checkout: error: unknown branch '$1'"
+  exit 1
+fi
+
+# restore working dir and index using the target branch
+targetBranchCommit=$(grep -E "^$1 .*$" <"./.pig/branchList" | cut -f2 -d' ')
+targetBranchCommitMessage=$(grep -E "^$targetBranchCommit\|([^|]+)\|$1\|[0-9]+$" <"./.pig/commit_log" | cut -f2 -d'|')
+
+# check if there are any uncommit files which is only modified in working dir
+uncommitedFiles=""
+
+tmp=$(mktemp)
+
+# store all file name into temp file
+find . -maxdepth 1|
+grep -Ev "^$" |
+grep -Ev "^\.$" |
+grep -Ev "^\.\/\.pig$" |
+sed -E "s/^\.\/(.*)$/\1/g" >"$tmp"
+
+curBranch=$(cat "./.pig/head")
+curBranchCommit=$(grep -E "^$curBranch [0-9]*$" <"./.pig/branchList" | cut -f2 -d' ')
+curBranchMessage=$(grep -E "^$curBranchCommit\|[^|]+\|$curBranch\|([0-9]+)$" <"./.pig/commit_log" |  cut -f2 -d'|')
+
+while read -r file
+do
+  # same file exists in the target branch, but not commited to current branch
+  if [ -e "./.pig/branches/$1/$targetBranchCommit/$targetBranchCommitMessage/$file" ] && [ ! -e "./.pig/branches/$curBranch/$curBranchCommit/$curBranchMessage/$file" ]
+  then
+    uncommitedFiles="$uncommitedFiles:$file"
+  fi
+done <"$tmp"
+
+rm "$tmp"
+
+if [ "$uncommitedFiles" != "" ]
+then
+  # files that are changed and not commited into current branch
+  uncommitedFiles=$(echo "$uncommitedFiles" |tr ':' '\n' |grep -Ev "^$")
+  echo "pigs-checkout: error: Your changes to the following files would be overwritten by checkout:"
+  echo "$uncommitedFiles"
+  exit 1
+fi
+
+# restore working directory and index, need to check whether a file is modified and not added to index
+# only delete the files that are not modified
+find . -maxdepth 1|
+grep -Ev "^$" |
+grep -Ev "^\.$" |
+grep -Ev "^\.\/\.pig$" |
+sed -E "s/^\.\/(.*)$/\1/g"|
+while read -r file
+do
+  if [ -e "./.pig/branches/$1/$targetBranchCommit/$targetBranchCommitMessage/$file" ]
+  then
+    # echo "current file $file exists in target branch"
+
+    # file exists in target branch, check whether is an untracked file or tracked file in local branch
+    if [ ! -e "./.pig/branches/$curBranch/$curBranchCommit/$curBranchMessage/$file" ]
+    then
+      # untracked file, needs to modified later
+      :
+    else
+      # tracked file, check whether it is modified compared with local branch
+      if [ "$(diff "./$file" "./.pig/branches/$curBranch/$curBranchCommit/$curBranchMessage/$file" | wc -l )" -gt 0 ]
+      then
+        
+        # file is modified, dont delete and copy from the target branch
+        continue
+      else
+        # file is not modified in current branch, but different with the same file in the target branch
+        rm -rf "./$file"
+        rm -rf "./.pig/index/$file"
+      fi
+    fi
+  else
+    # echo "current file $file exists in local branch"
+
+    # file not exists in target branch, either an tracked file in local branch or an untracked file
+    if [ ! -e "./.pig/branches/$curBranch/$curBranchCommit/$curBranchMessage/$file" ]
+    then
+      # untracked file
+      continue
+    else
+      # tracked file in local branch, needs to be deleted from working dir and index
+      rm -rf "./$file"
+      rm -rf "./.pig/index/$file"
+    fi
+  fi
+done
+
+# compare the file of target branch with current branch
+find ./.pig/branches/"$1"/"$targetBranchCommit"/"$targetBranchCommitMessage"/* -maxdepth 1 |
+while read -r file
+do
+  targetFile=$(echo "$file" | sed -E "s/^\.\/\.pig\/branches\/$1\/$targetBranchCommit\/$targetBranchCommitMessage\/(.*)$/\1/g" )
+  if [ -e "./$targetFile" ]
+  then
+    # if current file exists in working dir, dont copy
+    continue
+  else
+    # file not exists in working dir, copy file into working dir
+    cp -r "$file" ./
+  fi
+done
+
+# restore index
+find ./.pig/branches/"$1"/"$targetBranchCommit"/"$targetBranchCommitMessage"/* -maxdepth 1 |
+sed -E "s/^\.\/\.pig\/branches\/$1\/$targetBranchCommit\/$targetBranchCommitMessage\/(.*)$/\1/g" |
+while read -r file
+do
+  # if certain files have been changed, do not restore those files
+  if [ "$(grep -Ec "^$file .*$" <"./.pig/index/.diff")" -eq 1 ]
+  then
+    # file in index is changed
+    continue
+  else
+    # file in index is not changed
+    cp -r ./.pig/branches/"$1"/"$targetBranchCommit"/"$targetBranchCommitMessage"/"$file" "./.pig/index/"
+  fi
+done
+
+# change head pointer to points to the specified branch
+echo "$1" >"./.pig/head"
+echo "Switched to branch '$1'"
+
+exit 0

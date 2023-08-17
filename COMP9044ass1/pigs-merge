@@ -1,0 +1,320 @@
+#!/bin/dash
+
+# check if repo is initialized
+pigs-init-check
+if [ "$?" -eq 1 ]
+then
+  echo "pigs-merge: error: pigs repository directory .pig not found"
+  exit 1
+fi
+
+if [ "$#" -eq 1 ]
+then
+  echo "pigs-merge: error: empty commit message"
+  exit 1
+fi
+
+# input validation ( commit/branch -m message)
+if [ ! "$#" -eq 3 ]
+then
+  echo "pigs-merge: error: invalid aruguments for pigs-merge"
+  exit 1
+fi
+
+# check if the second argument is -m
+if [ "$2" != "-m" ]
+then
+  echo "pigs-merge: error: the second argument should be -m"
+  exit 1
+fi
+
+# if branch is provided, check if it exists
+isBranch=$(grep -Ec "^$1 [0-9]*$" <"./.pig/branchList")
+
+# if commit number is provided, check if it is valid
+isCommit=""
+nextCommit=$(cat "./.pig/commit_num")
+if [ "$1" -eq "$1" ] 2>/dev/null
+then
+  isCommit="true"
+  # the first argument is a number, which is probably a commit number
+  if [ "$1" -ge "$nextCommit" ]
+  then
+    isCommit="false"
+  fi
+else
+  isCommit="false"
+fi
+
+option=""
+# check commit number and branch together
+if [ "$isBranch" -gt 0 ] && [ "$isCommit" = "false" ]
+then
+  # branch name provided
+  option="branch"
+elif [ "$isBranch" -eq 0 ] && [ "$isCommit" = "true" ]
+then
+  # commit number provided
+  option="commit"
+elif [ "$isBranch" -gt 0 ] && [ "$isCommit" = "true" ]
+then
+  # valid branch name and commit number
+  echo "pigs-merge: error: matching branch and commit found at the same time, please use commit number to be more specific"
+  exit 1
+else
+  # neither a valid branch name nor a valid commit number
+  echo "pigs-merge: error: unknown branch '$1'"
+  exit 1
+fi
+
+# check if the index is clean, no changes add to current branch
+if [ "$(wc -l <./.pig/index/.diff)" -gt 0 ]
+then
+  echo "pigs-merge: error: index is not clean, commit before merge"
+  exit 1
+fi
+
+# determine the commit to be merged in the merged branch
+mergeCommitNumber=""
+case "$option" in
+"branch")
+    # find the lastest commit of the merged branch
+    mergeCommitNumber=$(grep -E "^$1 [0-9]*$" <"./.pig/branchList" | cut -f2 -d' ')
+  ;;
+"commit")
+    mergeCommitNumber="$1"
+  ;;
+esac
+
+# determine type of merge we need to perform
+typeOfMerge=""
+
+# determine the type of merge (three way merge and fast-forward merge)
+curBranch=$(cat "./.pig/head")
+curBranchCommit=$(grep -E "^$curBranch [0-9]*$" <"./.pig/branchList" | cut -f2 -d' ')
+curBranchCommitMessage=$(grep -E "^$curBranchCommit\|[^|]+\|$curBranch\|([0-9]+)$" <"./.pig/commit_log" | cut -f2 -d'|')
+
+# check merge conflict, if exists, do not perform merge
+# compare each file of the merged branch with the current branch
+mergedBranch=""
+mergedBranchCommit=""
+mergedBranchCommitMessage=""
+
+# first check whether the $1 is a branch or a commit
+if [ "$option" = "branch" ]
+then
+  mergedBranch=$1
+  mergedBranchCommit=$(grep -E "^$mergedBranch [0-9]*$" <"./.pig/branchList" | cut -f2 -d' ')
+  mergedBranchCommitMessage=$(grep -E "^$mergedBranchCommit\|[^|]+\|$mergedBranch\|([0-9]+)$" <"./.pig/commit_log" |  cut -f2 -d'|')
+else
+  # $1 is a commit number, determine which branch it belongs to
+  # since in our design, multiple branches could contain same commit, we only choose one of them except the current branch for merging
+  mergedBranch=$(grep -E "^$mergeCommitNumber\|.*$" <"./.pig/commit_log" | cut -f3 -d'|'| grep -Ev "^$curBranch$" | head -n1 )
+  if [ "$mergedBranch" = "" ]
+  then
+    echo "pigs-merge: error: Not a commit that exists in any other branches"
+    exit 1
+  fi
+  mergedBranchCommit="$mergeCommitNumber"
+  mergedBranchCommitMessage=$(grep -E "^$mergedBranchCommit\|[^|]+\|$mergedBranch\|([0-9]+)$" <"./.pig/commit_log" |  cut -f2 -d'|')
+fi
+
+# if the lastest commit of the current branch doesnt exists in the target branch, use three way merge, otherwise fast-forward merge
+# temp file for storing commits of the target branch
+tmp=$(mktemp)
+
+# get all commits of the target branch
+find ./.pig/branches/"$mergedBranch" -maxdepth 1 |
+grep -Ev "^\.\/\.pig\/branches\/$mergedBranch$" | 
+sed -E "s/\.\/\.pig\/branches\/$mergedBranch\/(.*)/\1/g" >"$tmp"
+
+# current branch doesnt change after the merged branch is created
+if [ "$(grep -Ec "^$curBranchCommit$" <"$tmp")" -eq 1 ]
+then
+  # latest commit of the current branch exists in the target branch, use fast-forward merge
+  typeOfMerge="fast-forward"
+else
+  # three-way merge
+  typeOfMerge="three-way"
+fi
+
+rm "$tmp"
+
+# before checking merge conflict, needs to find the latest common ancestor
+tmp=$(mktemp)
+tmp2=$(mktemp)
+
+# find all commits of the current branch
+find ./.pig/branches/"$curBranch" -maxdepth 1 |
+grep -Ev "^\.\/\.pig\/branches\/$curBranch$" | 
+sed -E "s/\.\/\.pig\/branches\/$curBranch\/(.*)/\1/g" >"$tmp"
+
+# find all commits of the merged branch
+find ./.pig/branches/"$mergedBranch" -maxdepth 1 |
+grep -Ev "^\.\/\.pig\/branches\/$mergedBranch$" | 
+sed -E "s/\.\/\.pig\/branches\/$mergedBranch\/(.*)/\1/g" >"$tmp2"
+
+# combine two set of commits to find their intersection, then get the largest commit number
+# which is the lastest common ancestor
+cat "$tmp" >>"$tmp2"
+latestCommonCommit=$(sort <"$tmp2"|
+                    uniq -d |
+                    tail -n1 )
+
+latestCommonCommitMessage=$(grep -E "^$latestCommonCommit\|[^|]+\|$curBranch\|([0-9]+)$" <"./.pig/commit_log" |  cut -f2 -d'|')
+
+rm "$tmp"
+rm "$tmp2"
+
+tmp=$(mktemp)
+
+conflictFiles=""
+
+# find all files in the merged branch and store into temp file
+find ./.pig/branches/"$mergedBranch"/"$mergedBranchCommit"/"$mergedBranchCommitMessage" -maxdepth 1 |
+grep -Ev "^\.\/\.pig\/branches\/$mergedBranch\/$mergedBranchCommit\/$mergedBranchCommitMessage(\/\.diff)?$" |
+sed -E "s/^\.\/\.pig\/branches\/$mergedBranch\/$mergedBranchCommit\/$mergedBranchCommitMessage\/(.*)$/\1/g" >"$tmp"
+
+while read -r file
+do
+  # ensure the merged file exists at current/merged/latest common ancestor
+  if [ -e "./.pig/branches/$mergedBranch/$mergedBranchCommit/$mergedBranchCommitMessage/$file" ] &&
+    [ -e "./.pig/branches/$curBranch/$latestCommonCommit/$latestCommonCommitMessage/$file" ] &&
+    [ -e "./.pig/branches/$curBranch/$curBranchCommit/$curBranchCommitMessage/$file" ]
+  then
+    # if the file has been changed in both branches, do not combine then
+    if [ "$(diff "./.pig/branches/$mergedBranch/$mergedBranchCommit/$mergedBranchCommitMessage/$file" "./.pig/branches/$curBranch/$latestCommonCommit/$latestCommonCommitMessage/$file"|wc -l)" -gt 0 ] && 
+      [ "$(diff "./.pig/branches/$curBranch/$curBranchCommit/$curBranchCommitMessage/$file" "./.pig/branches/$curBranch/$latestCommonCommit/$latestCommonCommitMessage/$file"|wc -l)" -gt 0 ]
+    then
+      conflictFiles="$conflictFiles:$file"
+    fi
+  fi
+
+done <"$tmp"
+
+rm "$tmp"
+
+if [ "$conflictFiles" != "" ]
+then
+  conflictFiles=$(echo "$conflictFiles" |tr ':' '\n'|grep -Ev "^$")
+  echo "pigs-merge: error: These files can not be merged:"
+  echo "$conflictFiles"
+  exit 1
+fi 
+
+# only copy files into index, and commit if necessary
+case "$typeOfMerge" in
+"fast-forward")
+  # copy all files of the merged branch into the index of current branch
+  cp -r ./.pig/branches/"$mergedBranch"/"$mergedBranchCommit"/"$mergedBranchCommitMessage"/* ./.pig/index/
+
+  # remove all files in the working dir and copy files in index into working dir
+  #? rm -rf ./*
+  cp -r ./.pig/index/* ./
+
+  # copy all commits of the merged branch into new branch in local repo
+  rm -rf ./.pig/branches/"$curBranch"/*
+
+  # we may specify an intermediate commit number for merging, so we need can only copy the previous commits before the specified commit
+  find ./.pig/branches/"$mergedBranch"/ -maxdepth 1 |
+  grep -Ev "^\.\/\.pig\/branches\/$mergedBranch\/$" |
+  sed -E "s/^\.\/\.pig\/branches\/$mergedBranch\/(.*)$/\1/g" |
+  while read -r commit
+  do
+    if [ "$commit" -le "$mergedBranchCommit" ]
+    then
+      cp -r ./.pig/branches/"$mergedBranch"/"$commit" ./.pig/branches/"$curBranch"/
+    fi
+  done
+
+  # modify commit_log to copy necessary commits of the target branch into the current branch
+  # delete all existing commits of currrent branch 
+  sed -Ei "/^[0-9]+\|[^|]+\|$curBranch\|[0-9]+$/d" "./.pig/commit_log"
+  tmp=$(mktemp)
+
+  # select all commits of the merged branch, then changed the branch info and store them back to commit log
+  grep -E "^[0-9]+\|[^|]+\|$mergedBranch\|[0-9]+$" <"./.pig/commit_log" >"$tmp"
+
+  while read -r line
+  do
+    commitNum=$(echo "$line" | sed -E "s/^([0-9]+)\|[^|]+\|$mergedBranch\|[0-9]+$/\1/g")
+    if [ "$commitNum" -le "$mergedBranchCommit" ]
+    then
+       echo "$line" | sed -E "s/^([0-9]+\|[^|]+\|)$mergedBranch(\|[0-9]+)$/\1$curBranch\2/g" >>"./.pig/commit_log"
+    fi
+  done <"$tmp"
+
+  rm "$tmp"
+
+  # update the branch pointer to points to the latest commit
+  sed -Ei "/^$curBranch .*$/d" "./.pig/branchList"
+  echo "$curBranch $mergedBranchCommit" >>"./.pig/branchList"
+  
+  echo "Fast-forward: no commit created"
+;;
+"three-way")
+  # copy changed files of the merged branch into the index of current branch
+  find ./.pig/branches/"$mergedBranch"/"$mergedBranchCommit"/"$mergedBranchCommitMessage"/* -maxdepth 1 |
+  sed -E "s/^\.\/\.pig\/branches\/$mergedBranch\/$mergedBranchCommit\/$mergedBranchCommitMessage\/(.*)$/\1/g" |
+  while read -r file
+  do
+    if [ -e "./.pig/index/$file" ]
+    then
+      # if file exists in current branch
+      # check difference to see whether the file should be copied by using the lastest common ancestor
+      if [ "$(diff ./.pig/branches/"$mergedBranch"/"$mergedBranchCommit"/"$mergedBranchCommitMessage"/"$file" ./.pig/branches/"$curBranch"/"$latestCommonCommit"/"$latestCommonCommitMessage"/"$file" | wc -l)" -eq 0 ]
+      then
+        # file in the merged branch doesn't change since the branch is created, dont copy
+        :
+      else
+        cp -r ./.pig/branches/"$mergedBranch"/"$mergedBranchCommit"/"$mergedBranchCommitMessage"/"$file" ./.pig/index/
+      fi
+    else
+      # not exists, copy file into index
+      cp -r ./.pig/branches/"$mergedBranch"/"$mergedBranchCommit"/"$mergedBranchCommitMessage"/"$file" ./.pig/index/
+    fi 
+  done
+
+  # copy all commits of the merged branch into current branch
+  find ./.pig/branches/"$mergedBranch"/ -maxdepth 1 |
+  grep -Ev "^\.\/\.pig\/branches\/$mergedBranch\/$" |
+  sed -E "s/^\.\/\.pig\/branches\/$mergedBranch\/(.*)$/\1/g" |
+  while read -r commit
+  do
+    if [ "$commit" -le "$mergedBranchCommit" ]
+    then
+      cp -r ./.pig/branches/"$mergedBranch"/"$commit" ./.pig/branches/"$curBranch"/
+    fi
+  done
+
+  # update commit log
+  tmp=$(mktemp)
+  grep -E "^[0-9]+\|[^|]+\|$mergedBranch\|[0-9]+$" <"./.pig/commit_log" >"$tmp"
+
+  while read -r line
+  do
+    commitNum=$(echo "$line" | sed -E "s/^([0-9]+)\|[^|]+\|$mergedBranch\|[0-9]+$/\1/g")
+    if [ "$commitNum" -le "$mergedBranchCommit" ]
+    then
+       echo "$line" | sed -E "s/^([0-9]+\|[^|]+\|)$mergedBranch(\|[0-9]+)$/\1$curBranch\2/g" >>"./.pig/commit_log"
+    fi
+  done <"$tmp"
+
+  sort <"./.pig/commit_log" | uniq >"$tmp"
+  cp "$tmp" "./.pig/commit_log"
+
+  rm "$tmp"
+
+  # copy .diff of the merged branch to ensure we can changes into current branch
+  cp -r ./.pig/branches/"$mergedBranch"/"$mergedBranchCommit"/"$mergedBranchCommitMessage"/.diff ./.pig/index/.diff
+  
+  # remove all files in the working dir and copy files in index into working dir
+  #? rm -rf ./*
+  cp -r ./.pig/index/* ./
+
+  # modify commit_log by creating an new commit,and update the branch pointer to points to the latest commit
+  pigs-commit -m "$3"
+;;
+esac
+
+exit 0
